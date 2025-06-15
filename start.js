@@ -10,7 +10,8 @@ const {
   DisconnectReason,
   downloadMediaMessage
 } = pkg;
-import { startUpdateChecks } from './commands/updateSystem.js';
+
+import * as autoReact from './commands/auto_react.js';
 import { handleAntiDelete } from './commands/antidelete.js';
 import { Boom } from '@hapi/boom';
 import readline from 'readline';
@@ -119,6 +120,8 @@ async function startBot() {
       console.log(chalk.green('✅ Bot connected!'));
       isConnected = true;
       
+      
+
       // Final attempt to get bot ID if not set
       if (!botID) {
         try {
@@ -135,13 +138,11 @@ async function startBot() {
       }
       
       // Initialize update system if we have bot ID
-      if (botID) {
-        startUpdateChecks(sock, botID);
-      } else {
-        console.error('❌ Bot ID not available for update system');
-      }
+    
 
-      const welcomeText = `
+
+      
+       const welcomeText = `
 ✨ *WELCOME TO ICEY-MD* ✨
 
 👋 Hello, *ICEY-MD User*! We're excited to have you on board.
@@ -161,17 +162,40 @@ async function startBot() {
 💫 Enjoy the ride with *ICEY-MD* - Smart, Simple, Powerful.
 `;
 
-      const welcomeImagePath = path.join(__dirname, 'media', 'icey_md_menu.jpg');
+    const welcomeImagePath = path.join(__dirname, 'media', 'icey_md_menu.jpg');
+    
+    try {
+      // Send welcome message with channel button
+      await sock.sendMessage(sock.user.id, {
+        image: fs.readFileSync(welcomeImagePath),
+        caption: welcomeText,
+        footer: '📢 Join our official channel for updates!',
+        buttons: [
+          { buttonId: 'join_channel', buttonText: { displayText: '📲 Join ICEY-MD Channel' }, type: 1 }
+        ],
+        headerType: 4
+      });
       
-      try {
-        await sock.sendMessage(sock.user.id, {
-          image: fs.readFileSync(welcomeImagePath),
-          caption: welcomeText
-        });
-      } catch (e) {
-        console.error('Failed to send welcome message:', e);
-      }
-
+      // Add handler for channel button
+      sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg?.message?.buttonsResponseMessage) return;
+        
+        const buttonId = msg.message.buttonsResponseMessage.selectedButtonId;
+        const jid = msg.key.remoteJid;
+        
+        if (buttonId === 'join_channel') {
+          await sock.sendMessage(jid, {
+            text: '📲 *JOIN OUR OFFICIAL CHANNEL*\n\n' +
+                  'Get the latest updates, features, and news:\n' +
+                  'https://whatsapp.com/channel/0029VaYOURCHANNELCODE'
+          });
+        }
+      });
+      
+    } catch (e) {
+      console.error('Failed to send welcome message:', e);
+    }
       rl.close();
     }
     
@@ -255,6 +279,9 @@ async function startBot() {
 
   // Message processing handler
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+
+    
+    
     for (const m of messages) {
       try {
         if (!m.message) continue;
@@ -272,12 +299,16 @@ async function startBot() {
           else if (m.message.imageMessage?.caption) text = m.message.imageMessage.caption;
           else if (m.message.videoMessage?.caption) text = m.message.videoMessage.caption;
           else if (m.message.documentMessage?.caption) text = m.message.documentMessage.caption;
+
+          
   
           if (text.includes('🚨 *DELETED MESSAGE ALERT* 🚨')) {
             console.log('💾 Skipping cache for alert message');
             continue;
           }
         }
+        
+        
   
         // Cache the message
         messageCache.set(m.key.id, {
