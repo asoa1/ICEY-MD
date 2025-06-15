@@ -1,0 +1,37 @@
+{
+  "name": "icey-md-bot",
+  "version": "1.0.0",
+  "description": "Custom WhatsApp Bot with AI, media conversion, and more",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.6.0",
+    "axios": "^1.5.1",
+    "chalk": "^5.3.0",
+    "file-type": "^18.0.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "fs-extra": "^11.2.0",
+    "node-fetch": "^3.3.2",
+    "pino": "^8.17.0",
+    "play-dl": "^1.8.7",
+    "yt-search": "^2.10.7",
+    "ytdl-core": "^4.11.5"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "whatsapp-bot",
+    "baileys",
+    "chatbot",
+    "music",
+    "AI",
+    "yt"
+  ],
+  "author": "YourName",
+  "license": "MIT"
+}
