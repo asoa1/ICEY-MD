@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import fetch from 'node-fetch';
+import { spawn } from 'child_process';
 
 const REPO_OWNER = 'asoa1';
 const REPO_NAME = 'ICEY-MD';
@@ -10,11 +11,6 @@ let ownerJID = null;
 
 export async function checkForUpdates(sock) {
   try {
-    if (!sock) {
-      console.error('❌ Cannot check updates: sock not provided');
-      return false;
-    }
-    
     console.log('🔍 Checking for updates...');
     
     // Get local commit hash
@@ -40,7 +36,7 @@ export async function checkForUpdates(sock) {
       console.log('✅ Update available!');
       
       // Notify owner if set
-      if (ownerJID && sock) {
+      if (ownerJID) {
         try {
           await sock.sendMessage(ownerJID, { text: updateMessage });
         } catch (notifyErr) {
@@ -60,13 +56,19 @@ export async function checkForUpdates(sock) {
 }
 
 export function startUpdateChecks(sock, initialOwnerJID) {
-  if (!sock || !initialOwnerJID) {
-    console.error('❌ Cannot start update checks: missing sock or owner JID');
+  if (!initialOwnerJID) {
+    console.error('❌ Cannot start update checks: owner JID not provided');
     return;
   }
   
   ownerJID = initialOwnerJID;
   console.log(`👑 Update system owner: ${ownerJID}`);
+  
+  // Don't start checks if sock is not available
+  if (!sock) {
+    console.log('⏳ Deferring update checks until sock is available');
+    return;
+  }
   
   // Start periodic update checks (every 6 hours)
   updateCheckInterval = setInterval(() => {
@@ -101,36 +103,48 @@ export function getUpdateInfo() {
 
 export async function performUpdate(sock, jid) {
   try {
-    await sock.sendMessage(jid, { text: '🔄 Updating from GitHub repository...' });
+    await sock.sendMessage(jid, { text: '🔄 Performing force update from GitHub...' });
 
-    // Execute git pull
-    const gitPull = execSync('git pull https://github.com/asoa1/ICEY-MD main').toString();
-    console.log('Git Output:\n', gitPull);
+    // 1. Fetch latest changes
+    execSync('git fetch origin main');
     
-    // Truncate long output
-    const truncatedOutput = gitPull.length > 1500 
-      ? gitPull.substring(0, 1500) + '... (output truncated)' 
-      : gitPull;
+    // 2. Reset to remote main branch
+    execSync('git reset --hard origin/main');
     
-    await sock.sendMessage(jid, { text: `📥 Update Result:\n${truncatedOutput}` });
+    // 3. Clean any untracked files
+    execSync('git clean -fd');
+    
+    const status = execSync('git status').toString();
+    console.log('Git Status:\n', status);
+    
+    await sock.sendMessage(jid, { text: `✅ Force update completed!\n${status.slice(0, 1000)}` });
 
     // Check if dependencies need updating
-    let npmOutput = '';
-    if (gitPull.includes('package.json') || gitPull.includes('node_modules')) {
-      await sock.sendMessage(jid, { text: '📦 Installing updated dependencies...' });
-      npmOutput = execSync('npm install').toString();
-      
-      console.log('NPM Output:', npmOutput);
-      
-      // Truncate npm output
-      const truncatedNpm = npmOutput.length > 1000 
-        ? npmOutput.substring(0, 1000) + '...' 
-        : npmOutput;
-      
-      await sock.sendMessage(jid, { text: `📦 Dependencies updated:\n${truncatedNpm}` });
-    }
+    await sock.sendMessage(jid, { text: '📦 Checking dependencies...' });
+    const npmOutput = execSync('npm install').toString();
+    
+    console.log('NPM Output:', npmOutput);
+    await sock.sendMessage(jid, { text: `📦 Dependencies updated:\n${npmOutput.slice(0, 1000)}` });
 
-    await sock.sendMessage(jid, { text: '♻️ Bot will restart automatically in 3 seconds...' });
+    // Restart bot
+    await sock.sendMessage(jid, { text: '♻️ Bot will restart in 3 seconds...' });
+    
+    setTimeout(() => {
+      try {
+        const args = [process.argv[1], ...process.execArgv];
+        const child = spawn(process.argv[0], args, {
+          detached: true,
+          stdio: 'inherit',
+          windowsHide: true
+        });
+        child.unref();
+        process.exit(0);
+      } catch (restartErr) {
+        console.error('Restart failed:', restartErr);
+        sock.sendMessage(jid, { text: '❌ Restart failed! Please restart manually.' });
+      }
+    }, 3000);
+    
     return true;
   } catch (updateErr) {
     console.error('Update error:', updateErr);
