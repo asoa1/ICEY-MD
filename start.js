@@ -10,8 +10,6 @@ const {
   DisconnectReason,
   downloadMediaMessage
 } = pkg;
-
-import * as autoReact from './commands/auto_react.js';
 import { handleAntiDelete } from './commands/antidelete.js';
 import { Boom } from '@hapi/boom';
 import readline from 'readline';
@@ -67,38 +65,17 @@ async function startBot() {
   });
   
   // Pass messageCache to anti-delete handler
+  
   handleAntiDelete(sock, messageCache);
 
   sock.ev.on('creds.update', saveCreds);
-
-  // Store bot ID from credentials
-  let botID = state.creds.me?.id || null;
-  console.log(`🤖 Bot ID from credentials: ${botID || 'Not set yet'}`);
-  
-  // Track if we're connected
-  let isConnected = false;
-  
-  // Initialize update system when credentials are updated
-  sock.ev.on('creds.update', () => {
-    if (!botID && state.creds.me?.id) {
-      botID = state.creds.me.id;
-      console.log(`👑 Bot ID confirmed: ${botID}`);
-      
-      if (isConnected) {
-        startUpdateChecks(sock, botID);
-      }
-    }
-  });
 
   if (!sock.authState.creds.registered) {
     const number = await ask('📱 Enter your number with country code: ');
     const code = await sock.requestPairingCode(number.trim());
     console.log(chalk.magenta('🔑 Pairing Code:'), chalk.bold(code));
-  } else if (botID) {
-    // Initialize immediately if already registered
-    console.log('✅ Already registered, will initialize update system after connection');
   }
-  
+
   // Load commands
   for (let file of fs.readdirSync(path.join(__dirname, 'commands'))) {
     if (file.endsWith('.js')) {
@@ -116,33 +93,48 @@ async function startBot() {
   }
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-    if (connection === 'open') {
-      console.log(chalk.green('✅ Bot connected!'));
-      isConnected = true;
-      
-      
-
-      // Final attempt to get bot ID if not set
-      if (!botID) {
+    sock.ev.on('group-participants.update', async (update) => {
+      const { id, participants, action } = update;
+    
+      for (const participant of participants) {
         try {
-          if (sock.user && sock.user.id) {
-            botID = sock.user.id;
-            console.log(`👑 Bot ID from socket: ${botID}`);
-          } else if (state.creds.me?.id) {
-            botID = state.creds.me.id;
-            console.log(`👑 Bot ID from credentials: ${botID}`);
+          const metadata = await sock.groupMetadata(id);
+          const groupName = metadata.subject;
+          const members = metadata.participants.length;
+    
+          const profilePicture = await sock.profilePictureUrl(participant, 'image').catch(() => null);
+          const name = participant.split('@')[0];
+    
+          const time = new Date().toLocaleTimeString('en-NG', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          });
+    
+          if (action === 'add' && welcomeGroups.has(id)) {
+            await sock.sendMessage(id, {
+              image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/welcome.jpg'),
+              caption: `🎉 *Welcome, @${name}!* 🎉\n📍 You joined *${groupName}*\n👥 Member: ${members}\n🕓 Time: ${time}`,
+              mentions: [participant]
+            });
+          } else if (action === 'remove' && goodbyeGroups.has(id)) {
+            await sock.sendMessage(id, {
+              image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/goodbye.jpg'),
+              caption: `👋 @${name} has left *${groupName}*.\n👥 Members left: ${members}\n🕓 Time: ${time}`,
+              mentions: [participant]
+            });
           }
-        } catch (e) {
-          console.error('Failed to get bot ID:', e);
+          
+        } catch (err) {
+          console.error('❌ Error in welcome/goodbye message:', err);
         }
       }
-      
-      // Initialize update system if we have bot ID
+    });
     
+    if (connection === 'open') {
+      console.log(chalk.green('✅ Bot connected!'));
 
-
-      
-       const welcomeText = `
+      const welcomeText = `
 ✨ *WELCOME TO ICEY-MD* ✨
 
 👋 Hello, *ICEY-MD User*! We're excited to have you on board.
@@ -162,89 +154,27 @@ async function startBot() {
 💫 Enjoy the ride with *ICEY-MD* - Smart, Simple, Powerful.
 `;
 
-    const welcomeImagePath = path.join(__dirname, 'media', 'icey_md_menu.jpg');
-    
-    try {
-      // Send welcome message with channel button
-      await sock.sendMessage(sock.user.id, {
-        image: fs.readFileSync(welcomeImagePath),
-        caption: welcomeText,
-        footer: '📢 Join our official channel for updates!',
-        buttons: [
-          { buttonId: 'join_channel', buttonText: { displayText: '📲 Join ICEY-MD Channel' }, type: 1 }
-        ],
-        headerType: 4
-      });
+      const welcomeImagePath = path.join(__dirname, 'media', 'icey_md_menu.jpg');
       
-      // Add handler for channel button
-      sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg?.message?.buttonsResponseMessage) return;
-        
-        const buttonId = msg.message.buttonsResponseMessage.selectedButtonId;
-        const jid = msg.key.remoteJid;
-        
-        if (buttonId === 'join_channel') {
-          await sock.sendMessage(jid, {
-            text: '📲 *JOIN OUR OFFICIAL CHANNEL*\n\n' +
-                  'Get the latest updates, features, and news:\n' +
-                  'https://whatsapp.com/channel/0029VaYOURCHANNELCODE'
-          });
-        }
-      });
-      
-    } catch (e) {
-      console.error('Failed to send welcome message:', e);
-    }
+      try {
+        await sock.sendMessage(sock.user.id, {
+          image: fs.readFileSync(welcomeImagePath),
+          caption: welcomeText
+        });
+      } catch (e) {
+        console.error('Failed to send welcome message:', e);
+      }
+
       rl.close();
     }
     
     if (connection === 'close') {
-      isConnected = false;
       const rc = new Boom(lastDisconnect?.error)?.output?.statusCode;
       if (rc !== DisconnectReason.loggedOut) {
         console.log(chalk.yellow('⚠️ Reconnecting...'));
         startBot();
       } else {
         console.log(chalk.red('❌ Logged out.'));
-      }
-    }
-  });
-
-  sock.ev.on('group-participants.update', async (update) => {
-    const { id, participants, action } = update;
-  
-    for (const participant of participants) {
-      try {
-        const metadata = await sock.groupMetadata(id);
-        const groupName = metadata.subject;
-        const members = metadata.participants.length;
-  
-        const profilePicture = await sock.profilePictureUrl(participant, 'image').catch(() => null);
-        const name = participant.split('@')[0];
-  
-        const time = new Date().toLocaleTimeString('en-NG', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        });
-  
-        if (action === 'add' && welcomeGroups.has(id)) {
-          await sock.sendMessage(id, {
-            image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/welcome.jpg'),
-            caption: `🎉 *Welcome, @${name}!* 🎉\n📍 You joined *${groupName}*\n👥 Member: ${members}\n🕓 Time: ${time}`,
-            mentions: [participant]
-          });
-        } else if (action === 'remove' && goodbyeGroups.has(id)) {
-          await sock.sendMessage(id, {
-            image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/goodbye.jpg'),
-            caption: `👋 @${name} has left *${groupName}*.\n👥 Members left: ${members}\n🕓 Time: ${time}`,
-            mentions: [participant]
-          });
-        }
-        
-      } catch (err) {
-        console.error('❌ Error in welcome/goodbye message:', err);
       }
     }
   });
@@ -279,9 +209,6 @@ async function startBot() {
 
   // Message processing handler
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-
-    
-    
     for (const m of messages) {
       try {
         if (!m.message) continue;
@@ -299,16 +226,12 @@ async function startBot() {
           else if (m.message.imageMessage?.caption) text = m.message.imageMessage.caption;
           else if (m.message.videoMessage?.caption) text = m.message.videoMessage.caption;
           else if (m.message.documentMessage?.caption) text = m.message.documentMessage.caption;
-
-          
   
           if (text.includes('🚨 *DELETED MESSAGE ALERT* 🚨')) {
             console.log('💾 Skipping cache for alert message');
-            continue;
+            continue; // Now this is inside the loop
           }
         }
-        
-        
   
         // Cache the message
         messageCache.set(m.key.id, {
@@ -440,6 +363,15 @@ async function startBot() {
           continue;
         }
         
+        if (cmdName === 'update') {
+          await sock.sendMessage(jid, { text: '🔄 Updating...' });
+          exec('git pull', (err, stdout, stderr) => {
+            console.log(chalk.gray('Git Output:\n'), stdout || stderr);
+            setTimeout(() => process.exit(0), 1500);
+          });
+          continue;
+        }
+
         // New commands
         if (cmdName === 'anti-link') {
           if (!isGroup) {
