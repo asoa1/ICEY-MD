@@ -1,15 +1,17 @@
-const antiBotGroups = new Set(); // Stores groups where antibot is enabled
+const antiBotGroups = new Set();
 const welcomeGroups = new Set();
 const goodbyeGroups = new Set();
+const bannedUsers = new Set();
+const antiLinkGroups = new Set();
 
 import pkg from '@whiskeysockets/baileys';
 const {
   makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  DisconnectReason,
-  downloadMediaMessage
+  DisconnectReason
 } = pkg;
+
 import { handleAntiDelete } from './commands/antidelete.js';
 import { Boom } from '@hapi/boom';
 import readline from 'readline';
@@ -27,19 +29,16 @@ const commands = new Map();
 let msgDeleteEnabled = true;
 const messageCache = new Map();
 
-// Track banned users and groups with anti-link ON
-const bannedUsers = new Set();
-const antiLinkGroups = new Set();
+global.totalMessages = 0;
+global.botMode = 'public';
 
-global.totalMessages = 0;  // Track total messages
-global.botMode = 'public'; // or 'private'
-
-// Auto-clean messageCache function
+// Enhanced cache cleaning with deletion tracking
 function autoCleanCache(interval = 5 * 60 * 1000) {
   setInterval(() => {
     const now = Date.now();
-    const expiryTime = 5 * 60 * 1000; // 5 minutes
+    const expiryTime = 5 * 60 * 1000;
 
+    // Clean message cache
     for (const [key, message] of messageCache.entries()) {
       const messageTimestampSec = message.messageTimestamp || (message.key && message.key.timestamp);
       const messageTimestamp = messageTimestampSec ? messageTimestampSec * 1000 : now;
@@ -48,7 +47,8 @@ function autoCleanCache(interval = 5 * 60 * 1000) {
         messageCache.delete(key);
       }
     }
-    console.log(chalk.gray(`🧹 messageCache cleaned. Current size: ${messageCache.size}`));
+
+    console.log(chalk.gray(`🧹 Cache cleaned | Messages: ${messageCache.size}`));
   }, interval);
 }
 
@@ -63,9 +63,8 @@ async function startBot() {
     browser: ['Ubuntu', 'Chrome', '22.04'],
     shouldIgnoreJid: () => false
   });
-  
-  // Pass messageCache to anti-delete handler
-  
+
+  // Initialize anti-delete with required parameters
   handleAntiDelete(sock, messageCache);
 
   sock.ev.on('creds.update', saveCreds);
@@ -93,67 +92,10 @@ async function startBot() {
   }
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-    sock.ev.on('group-participants.update', async (update) => {
-      const { id, participants, action } = update;
-    
-      for (const participant of participants) {
-        try {
-          const metadata = await sock.groupMetadata(id);
-          const groupName = metadata.subject;
-          const members = metadata.participants.length;
-    
-          const profilePicture = await sock.profilePictureUrl(participant, 'image').catch(() => null);
-          const name = participant.split('@')[0];
-    
-          const time = new Date().toLocaleTimeString('en-NG', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-          });
-    
-          if (action === 'add' && welcomeGroups.has(id)) {
-            await sock.sendMessage(id, {
-              image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/welcome.jpg'),
-              caption: `🎉 *Welcome, @${name}!* 🎉\n📍 You joined *${groupName}*\n👥 Member: ${members}\n🕓 Time: ${time}`,
-              mentions: [participant]
-            });
-          } else if (action === 'remove' && goodbyeGroups.has(id)) {
-            await sock.sendMessage(id, {
-              image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/goodbye.jpg'),
-              caption: `👋 @${name} has left *${groupName}*.\n👥 Members left: ${members}\n🕓 Time: ${time}`,
-              mentions: [participant]
-            });
-          }
-          
-        } catch (err) {
-          console.error('❌ Error in welcome/goodbye message:', err);
-        }
-      }
-    });
-    
     if (connection === 'open') {
       console.log(chalk.green('✅ Bot connected!'));
 
-      const welcomeText = `
-✨ *WELCOME TO ICEY-MD* ✨
-
-👋 Hello, *ICEY-MD User*! We're excited to have you on board.
-
-🔹 *Your Prefix:* [ . ]
-➡️ _If the bot isn't responding, simply log out, generate a new session ID, and redeploy._
-
-⏳ *Note:* The bot might take a few minutes to activate in group chats - but go ahead and try commands in the meantime!
-
-📜 *Try* \`.icey\` *to explore features, commands, and more.*
-
-🚀 *Powered by:* _anonymous_
-
-🛠️ *Need Help or Want to Report an Issue?*
-📞 *Developer Contact:* +2349167751648
-
-💫 Enjoy the ride with *ICEY-MD* - Smart, Simple, Powerful.
-`;
-
+      const welcomeText = `✨ *WELCOME TO ICEY-MD* ✨\n\n👋 Hello, *ICEY-MD User*!`;
       const welcomeImagePath = path.join(__dirname, 'media', 'icey_md_menu.jpg');
       
       try {
@@ -179,33 +121,43 @@ async function startBot() {
     }
   });
 
-  // Message delete event handlers
-  sock.ev.on('messages.delete', async (item) => {
-    if (!item.keys || !item.keys.length) return;
-    
-    console.log('🔄 Handling messages.delete event');
-    const updates = item.keys.map(key => ({
-      key,
-      messageStubType: 8  // Mark as deletion
-    }));
-    
-    sock.ev.emit('messages.update', updates);
-  });
-
-  sock.ev.on('message-receipt.update', async (receipts) => {
-    for (const { key, receipt } of receipts) {
-      if (receipt.type === 'deleted' && key) {
-        console.log('🔄 Handling message-receipt deletion event');
-        sock.ev.emit('messages.update', [{
-          key,
-          messageStubType: 8
-        }]);
+  // Group participants update handler
+  sock.ev.on('group-participants.update', async (update) => {
+    const { id, participants, action } = update;
+  
+    for (const participant of participants) {
+      try {
+        const metadata = await sock.groupMetadata(id);
+        const groupName = metadata.subject;
+        const members = metadata.participants.length;
+  
+        const profilePicture = await sock.profilePictureUrl(participant, 'image').catch(() => null);
+        const name = participant.split('@')[0];
+  
+        const time = new Date().toLocaleTimeString('en-NG', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+  
+        if (action === 'add' && welcomeGroups.has(id)) {
+          await sock.sendMessage(id, {
+            image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/welcome.jpg'),
+            caption: `🎉 *Welcome, @${name}!* 🎉\n📍 You joined *${groupName}*\n👥 Member: ${members}\n🕓 Time: ${time}`,
+            mentions: [participant]
+          });
+        } else if (action === 'remove' && goodbyeGroups.has(id)) {
+          await sock.sendMessage(id, {
+            image: profilePicture ? { url: profilePicture } : fs.readFileSync('./media/goodbye.jpg'),
+            caption: `👋 @${name} has left *${groupName}*.\n👥 Members left: ${members}\n🕓 Time: ${time}`,
+            mentions: [participant]
+          });
+        }
+      } catch (err) {
+        console.error('❌ Error in welcome/goodbye message:', err);
       }
     }
   });
-
-  // Start auto-clean of messageCache
-  autoCleanCache();
 
   // Message processing handler
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -216,9 +168,8 @@ async function startBot() {
         const jid = m.key.remoteJid;
         const sender = m.key.participant || m.key.remoteJid;
         const isGroup = jid.endsWith('@g.us');
-        const msgType = isGroup ? 'Group' : 'DM';
         
-        // Skip caching bot's own alert messages
+        // Skip processing our own alert messages
         if (m.key.fromMe) {
           let text = '';
           if (m.message.conversation) text = m.message.conversation;
@@ -226,13 +177,13 @@ async function startBot() {
           else if (m.message.imageMessage?.caption) text = m.message.imageMessage.caption;
           else if (m.message.videoMessage?.caption) text = m.message.videoMessage.caption;
           else if (m.message.documentMessage?.caption) text = m.message.documentMessage.caption;
-  
+
           if (text.includes('🚨 *DELETED MESSAGE ALERT* 🚨')) {
             console.log('💾 Skipping cache for alert message');
-            continue; // Now this is inside the loop
+            continue;
           }
         }
-  
+
         // Cache the message
         messageCache.set(m.key.id, {
           key: m.key,
@@ -240,9 +191,7 @@ async function startBot() {
           messageTimestamp: m.messageTimestamp,
           pushName: m.pushName
         });
-        console.log(`💾 Cached message: ${m.key.id}`);
         
-        // Increment total messages
         global.totalMessages++;
 
         // Extract message text
@@ -254,7 +203,7 @@ async function startBot() {
         else if (msg.videoMessage?.caption) text = msg.videoMessage.caption;
         else if (msg.documentMessage?.caption) text = msg.documentMessage.caption;
 
-        console.log(chalk.cyan(`📥 ${msgType} Message: ${text}`));
+        console.log(chalk.cyan(`📥 ${isGroup ? 'Group' : 'DM'} Message: ${text}`));
 
         // Check if sender is banned
         if (bannedUsers.has(sender) && text.startsWith('.')) {
@@ -479,6 +428,9 @@ async function startBot() {
       }
     }
   });
+
+  // Start auto-clean
+  autoCleanCache();
 }
 
 startBot();
