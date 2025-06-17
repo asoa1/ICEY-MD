@@ -6,8 +6,19 @@ const ALERT_PREFIX = "🚨 *DELETED MESSAGE ALERT* 🚨";
 let sockInstance = null;
 const processedDeletions = new Set(); // Track processed deletions
 const alertMessageIds = new Set(); // Track IDs of sent alerts
+const MAX_PROCESSED_IDS = 1000; // Maximum number of IDs to track
 
 export const command = 'antidelete';
+
+// Helper function to track deletions with cleanup
+function trackDeletion(id) {
+  processedDeletions.add(id);
+  if (processedDeletions.size > MAX_PROCESSED_IDS) {
+    // Remove oldest entries
+    const iterator = processedDeletions.values();
+    for (let i = 0; i < 100; i++) iterator.next();
+  }
+}
 
 export async function handleAntiDelete(sock, messageCache) {
   sockInstance = sock;
@@ -20,6 +31,8 @@ export async function handleAntiDelete(sock, messageCache) {
   console.log(`[ANTIDELETE] Handler registered with cache (${messageCache.size} items)`);
   
   sock.ev.on('messages.update', async (updates) => {
+    console.log('[ANTIDELETE] Received update:', JSON.stringify(updates, null, 2));
+    
     if (!OWNER_JID || !enabled || !sockInstance) {
       console.log(`[ANTIDELETE] Skipping - ${!OWNER_JID ? 'owner not set' : !sockInstance ? 'no socket' : 'disabled'}`);
       return;
@@ -39,7 +52,7 @@ export async function handleAntiDelete(sock, messageCache) {
           console.log('[ANTIDELETE] Skipping already processed deletion:', messageId);
           continue;
         }
-        processedDeletions.add(messageId);
+        trackDeletion(messageId);
         
         console.log('[ANTIDELETE] Processing deletion for:', messageId);
         
@@ -60,13 +73,21 @@ export async function handleAntiDelete(sock, messageCache) {
           const isDM = jid && jid.endsWith('@s.whatsapp.net');
           
           if (isDM) {
-            // Only alert once per message to prevent spam
-            if (!processedDeletions.has(`DM_ALERT_${messageId}`)) {
-              processedDeletions.add(`DM_ALERT_${messageId}`);
+            const dmAlertKey = `DM_${messageId}`;
+            if (!processedDeletions.has(dmAlertKey)) {
+              trackDeletion(dmAlertKey);
               
-              await sockInstance.sendMessage(OWNER_JID, {
-                text: `${ALERT_PREFIX}\n\n💬 DM Message Deleted!\n🆔 ID: ${messageId}\n⚠️ Content not cached`
-              });
+              // Add a short delay to ensure we don't process duplicates
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Double-check we still haven't processed this
+              if (!processedDeletions.has(`DM_SENT_${messageId}`)) {
+                trackDeletion(`DM_SENT_${messageId}`);
+                
+                await sockInstance.sendMessage(OWNER_JID, {
+                  text: `${ALERT_PREFIX}\n\n💬 DM Message Deleted!\n🆔 ID: ${messageId}\n⚠️ Content not cached`
+                });
+              }
             }
           }
           continue;
